@@ -298,9 +298,7 @@ func convert8to5(data []byte) ([]int, error) {
 	const toBits = 5
 	const maxv = (1 << toBits) - 1
 	for _, b := range data {
-		if b>>8 != 0 {
-			return nil, errors.New("invalid byte")
-		}
+		// No need to check b>>8 since b is a byte (0-255)
 		acc = (acc << 8) | int(b)
 		bits += 8
 		for bits >= toBits {
