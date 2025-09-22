@@ -128,29 +128,7 @@ func writeVarInt(w *bytes.Buffer, val uint64) {
 	}
 }
 
-// Read variable length integer
-func readVarInt(r *bytes.Reader) (uint64, error) {
-	first, err := r.ReadByte()
-	if err != nil {
-		return 0, err
-	}
-
-	if first < 0xfd {
-		return uint64(first), nil
-	} else if first == 0xfd {
-		var val uint16
-		err := binary.Read(r, binary.LittleEndian, &val)
-		return uint64(val), err
-	} else if first == 0xfe {
-		var val uint32
-		err := binary.Read(r, binary.LittleEndian, &val)
-		return uint64(val), err
-	} else {
-		var val uint64
-		err := binary.Read(r, binary.LittleEndian, &val)
-		return val, err
-	}
-}
+// readVarInt function removed - was unused
 
 // PSBT structures
 type PSBTInput struct {
