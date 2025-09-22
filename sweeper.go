@@ -81,6 +81,7 @@ type Sweeper struct {
 	maxUnconfInputs  int
 	maxChainDepth    int
 	testMode         bool // Skip strict address validation for testing
+	enforcePubKey    bool // Enforce that addresses match configured public key
 
 	// Change/output allocation strategy
 	changeSplitParts    int
@@ -110,6 +111,7 @@ func NewSweeper(pubKey []byte, network Network) *Sweeper {
 		kv:               NewMemKV(),
 		indexedUTXOs:     make([]UTXO, 0),
 		chainDepth:       make(map[string]int),
+		enforcePubKey:    true,
 	}
 }
 
@@ -155,6 +157,11 @@ func (s *Sweeper) SetPubKey(pubKey []byte) {
 // SetTestMode enables test mode (skips strict address validation)
 func (s *Sweeper) SetTestMode(enabled bool) {
 	s.testMode = enabled
+}
+
+// SetPubKeyCheck enables/disables enforcing that addresses match the configured public key
+func (s *Sweeper) SetPubKeyCheck(enabled bool) {
+	s.enforcePubKey = enabled
 }
 
 // SetUnconfirmedPolicy sets unconfirmed transaction policy
@@ -278,7 +285,10 @@ func (s *Sweeper) validateUTXOAddress(utxo UTXO) error {
 	}
 
 	// Validate against public key
-	return ValidateAddress(utxo.Address, s.pubKey, s.network)
+	if s.enforcePubKey {
+		return ValidateAddress(utxo.Address, s.pubKey, s.network)
+	}
+	return nil
 }
 
 // Check dust threshold

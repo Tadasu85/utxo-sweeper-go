@@ -114,13 +114,18 @@ func bech32Polymod(values []int) int {
 
 // Bech32 expand HRP
 func bech32ExpandHRP(hrp string) []int {
-	exp := make([]int, len(hrp)*2+1)
+	// per BIP-173: [hrp_high...] + [0] + [hrp_low...]
+	high := make([]int, len(hrp))
+	low := make([]int, len(hrp))
 	for i, c := range hrp {
-		exp[i*2] = int(c) >> 5
-		exp[i*2+1] = int(c) & 31
+		high[i] = int(c) >> 5
+		low[i] = int(c) & 31
 	}
-	exp[len(hrp)*2] = 0
-	return exp
+	out := make([]int, 0, len(high)+1+len(low))
+	out = append(out, high...)
+	out = append(out, 0)
+	out = append(out, low...)
+	return out
 }
 
 // Bech32 verify checksum (constant=1) and Bech32m verify (constant=0x2bc830a3)

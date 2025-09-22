@@ -15,6 +15,7 @@ func main() {
 	// Flags/environment
 	destFlag := flag.String("dest", "", "destination address for spend (overrides DEST_ADDR env)")
 	testMode := flag.Bool("testmode", true, "enable test mode (skip strict address validation)")
+	noPubKeyCheck := flag.Bool("no-pubkey-check", true, "disable enforcing that inputs match configured pubkey")
 	flag.Parse()
 
 	destAddr := os.Getenv("DEST_ADDR")
@@ -41,6 +42,7 @@ func main() {
 	sweeper.SetDustRate(600, 0.50, 55000)
 	sweeper.SetUnconfirmedPolicy(true, 2, 2)
 	sweeper.SetTestMode(*testMode)
+	sweeper.SetPubKeyCheck(!*noPubKeyCheck)
 
 	// Index UTXOs
 	fmt.Println("Indexing UTXOs...")
