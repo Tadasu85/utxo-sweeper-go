@@ -152,7 +152,7 @@ func getAssetFromNetwork(network Network) Asset {
 // SetFeeRate sets the fee rate in satoshis per vbyte
 func (s *Sweeper) SetFeeRate(rate int64) error {
 	if rate <= 0 {
-		return errors.New("fee rate must be positive")
+		return errors.New("fee rate must be positive (got " + fmt.Sprintf("%d", rate) + " sat/vB) - try values like 1-100")
 	}
 	s.feeRateSatsVB = rate
 	return nil
@@ -209,15 +209,15 @@ func (s *Sweeper) SetAllocationWeights(weights []WeightedAddr) {
 func (s *Sweeper) SetSpendingWallets(weights []WeightedAddr) error {
 	// basic validation
 	if len(weights) == 0 {
-		return errors.New("weights cannot be empty")
+		return errors.New("allocation weights cannot be empty - provide at least one address with weight > 0")
 	}
 	for i := range weights {
 		if weights[i].WeightBP <= 0 {
-			return fmt.Errorf("weight at index %d must be > 0", i)
+			return fmt.Errorf("weight at index %d must be > 0 (got %d basis points) - weights are in basis points (1/100th of a percent)", i, weights[i].WeightBP)
 		}
 		if !s.testMode {
 			if _, err := DecodeAddress(weights[i].Address); err != nil {
-				return fmt.Errorf("bad address at index %d: %w", i, err)
+				return fmt.Errorf("invalid address at index %d '%s': %w - check address format or use test mode", i, weights[i].Address, err)
 			}
 		}
 	}
@@ -247,7 +247,7 @@ func (s *Sweeper) SpendToWallets(totalSats int64, minChunk int64) (*TransactionP
 	}
 	outs := buildWeightedOutputs(totalSats, s.allocationByWeights, minChunk)
 	if len(outs) == 0 {
-		return nil, errors.New("no outputs after weighting")
+		return nil, errors.New("no outputs after weighting - check that total amount is sufficient and minChunk is reasonable")
 	}
 	return s.Spend(outs)
 }
@@ -346,7 +346,7 @@ func (s *Sweeper) setChainDepth(txid string, depth int) {
 // It performs coin selection, fee calculation, and transaction building.
 func (s *Sweeper) Spend(outputs []TxOutput) (*TransactionPlan, error) {
 	if len(outputs) == 0 {
-		return nil, errors.New("no outputs specified")
+		return nil, errors.New("no outputs specified - provide at least one destination address and amount")
 	}
 
 	// Validate outputs
@@ -698,7 +698,7 @@ func (s *Sweeper) SpendEven(destAddrs []string, totalSats int64, minChunk int64)
 func (s *Sweeper) SpendWeighted(weights []WeightedAddr, totalSats int64, minChunk int64) (*TransactionPlan, error) {
 	outs := buildWeightedOutputs(totalSats, weights, minChunk)
 	if len(outs) == 0 {
-		return nil, errors.New("no outputs after weighting")
+		return nil, errors.New("no outputs after weighting - check that total amount is sufficient and minChunk is reasonable")
 	}
 	return s.Spend(outs)
 }

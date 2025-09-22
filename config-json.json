@@ -1,0 +1,15 @@
+{
+  "network": "bitcoin_testnet",
+  "fee_rate": 5,
+  "dust_threshold_usd": 0.50,
+  "price_usd_per_btc": 55000.0,
+  "allow_unconfirmed": true,
+  "max_unconfirmed": 2,
+  "max_chain_depth": 2,
+  "change_split_parts": 1,
+  "target_chunk_sats": 60000,
+  "min_chunk_sats": 20000,
+  "output_format": "json",
+  "test_mode": true,
+  "enforce_pubkey": false
+}
