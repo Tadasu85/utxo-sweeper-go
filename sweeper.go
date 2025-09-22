@@ -1,3 +1,5 @@
+// Package main provides a dependency-free Bitcoin UTXO sweeper library.
+// This file contains the core Sweeper logic for UTXO management, transaction planning, and spending.
 package main
 
 import (
@@ -8,57 +10,75 @@ import (
 	"sort"
 )
 
-// Core types
+// UTXO represents an unspent transaction output.
+// It contains the transaction ID, output index, value, address, and confirmation status.
 type UTXO struct {
-	TxID      string
-	Vout      uint32
-	ValueSats int64
-	Address   string
-	Confirmed bool
+	TxID      string // Transaction hash (hex string)
+	Vout      uint32 // Output index in the transaction
+	ValueSats int64  // Value in satoshis
+	Address   string // Bitcoin address that can spend this UTXO
+	Confirmed bool   // Whether the transaction is confirmed
 }
 
+// TxOutput represents a transaction output to be created.
+// It specifies the destination address and value in satoshis.
 type TxOutput struct {
-	Address   string
-	ValueSats int64
+	Address   string // Destination Bitcoin address
+	ValueSats int64  // Value in satoshis
 }
 
+// WeightedAddr represents an address with an allocation weight.
+// Used for weighted distribution of funds across multiple addresses.
 type WeightedAddr struct {
-	Address  string
-	WeightBP int
+	Address  string // Bitcoin address
+	WeightBP int    // Weight in basis points (1/100th of a percent)
 }
 
+// TransactionPlan contains all the information needed to create a transaction.
+// It includes inputs, outputs, fees, and the raw transaction/PSBT.
 type TransactionPlan struct {
-	Inputs     []UTXO
-	Outputs    []TxOutput
-	FeeSats    int64
-	RawTx      *MsgTx
-	PSBT       *PSBT
-	ChangeIdxs []int
+	Inputs     []UTXO     // UTXOs to spend
+	Outputs    []TxOutput // Outputs to create
+	FeeSats    int64      // Total fee in satoshis
+	RawTx      *MsgTx     // Raw transaction
+	PSBT       *PSBT      // Partially Signed Bitcoin Transaction
+	ChangeIdxs []int      // Indices of change outputs
 }
 
+// Opts contains configuration options for the Sweeper.
+// These settings control fee calculation, dust filtering, and transaction behavior.
 type Opts struct {
-	FeeRateSatsVB       int64
-	MinDustSats         int64
-	MinUSD              float64
-	PriceUSDPerBTC      float64
-	AllowUnconfirmed    bool
-	MaxUnconfInputs     int
-	ChangeSplitParts    int
-	TargetChunkSats     int64
-	MinChunkSats        int64
-	AllocationByWeights []WeightedAddr
-	MaxChainChildren    int
+	FeeRateSatsVB       int64          // Fee rate in satoshis per virtual byte
+	MinDustSats         int64          // Minimum dust threshold in satoshis
+	MinUSD              float64        // Minimum dust threshold in USD
+	PriceUSDPerBTC      float64        // BTC price in USD for dust calculation
+	AllowUnconfirmed    bool           // Whether to allow unconfirmed UTXOs
+	MaxUnconfInputs     int            // Maximum unconfirmed inputs per transaction
+	ChangeSplitParts    int            // Number of parts to split change into
+	TargetChunkSats     int64          // Target size for change chunks
+	MinChunkSats        int64          // Minimum size for change chunks
+	AllocationByWeights []WeightedAddr // Weighted addresses for fund allocation
+	MaxChainChildren    int            // Maximum depth for unconfirmed transaction chains
 }
 
+// KV defines a key-value storage interface for persisting UTXO data.
+// This allows for different storage backends (memory, database, etc.).
 type KV interface {
 	Put(key, value []byte) error
 	Get(key []byte) ([]byte, error)
 }
 
+// MemKV is an in-memory key-value store implementation.
+// It stores data in a Go map and is suitable for testing and small datasets.
 type MemKV struct{ m map[string][]byte }
 
-func NewMemKV() *MemKV                   { return &MemKV{m: map[string][]byte{}} }
+// NewMemKV creates a new in-memory key-value store.
+func NewMemKV() *MemKV { return &MemKV{m: map[string][]byte{}} }
+
+// Put stores a key-value pair in the memory store.
 func (k *MemKV) Put(key, v []byte) error { k.m[string(key)] = v; return nil }
+
+// Get retrieves a value by key from the memory store.
 func (k *MemKV) Get(key []byte) ([]byte, error) {
 	v, ok := k.m[string(key)]
 	if !ok {
@@ -67,35 +87,37 @@ func (k *MemKV) Get(key []byte) ([]byte, error) {
 	return v, nil
 }
 
-// Sweeper instance
+// Sweeper is the main instance for managing Bitcoin UTXOs and creating transactions.
+// It encapsulates all configuration, state, and transaction planning logic.
 type Sweeper struct {
 	// Configuration
-	pubKey           []byte
-	network          Network
-	asset            Asset
-	feeRateSatsVB    int64
-	minDustSats      int64
-	minUSD           float64
-	priceUSDPerBTC   float64
-	allowUnconfirmed bool
-	maxUnconfInputs  int
-	maxChainDepth    int
-	testMode         bool // Skip strict address validation for testing
-	enforcePubKey    bool // Enforce that addresses match configured public key
+	pubKey           []byte  // Public key for address derivation
+	network          Network // Bitcoin network (mainnet/testnet)
+	asset            Asset   // Cryptocurrency asset (BTC/LTC)
+	feeRateSatsVB    int64   // Fee rate in satoshis per virtual byte
+	minDustSats      int64   // Minimum dust threshold in satoshis
+	minUSD           float64 // Minimum dust threshold in USD
+	priceUSDPerBTC   float64 // BTC price in USD for dust calculation
+	allowUnconfirmed bool    // Whether to allow unconfirmed UTXOs
+	maxUnconfInputs  int     // Maximum unconfirmed inputs per transaction
+	maxChainDepth    int     // Maximum depth for unconfirmed transaction chains
+	testMode         bool    // Skip strict address validation for testing
+	enforcePubKey    bool    // Enforce that addresses match configured public key
 
 	// Change/output allocation strategy
-	changeSplitParts    int
-	targetChunkSats     int64
-	minChunkSats        int64
-	allocationByWeights []WeightedAddr
+	changeSplitParts    int            // Number of parts to split change into
+	targetChunkSats     int64          // Target size for change chunks
+	minChunkSats        int64          // Minimum size for change chunks
+	allocationByWeights []WeightedAddr // Weighted addresses for fund allocation
 
 	// State
-	kv           KV
-	indexedUTXOs []UTXO
-	chainDepth   map[string]int // txid -> depth
+	kv           KV             // Key-value store for UTXO persistence
+	indexedUTXOs []UTXO         // Currently indexed UTXOs
+	chainDepth   map[string]int // Transaction ID to chain depth mapping
 }
 
-// NewSweeper creates a new sweeper instance
+// NewSweeper creates a new Sweeper instance with default configuration.
+// It initializes the sweeper with the provided public key and network.
 func NewSweeper(pubKey []byte, network Network) *Sweeper {
 	return &Sweeper{
 		pubKey:           pubKey,
@@ -230,7 +252,8 @@ func (s *Sweeper) SpendToWallets(totalSats int64, minChunk int64) (*TransactionP
 	return s.Spend(outs)
 }
 
-// Index adds a UTXO to the index
+// Index adds a UTXO to the sweeper's index after validation.
+// It checks the address format, dust threshold, and public key compatibility.
 func (s *Sweeper) Index(utxo UTXO) error {
 	// Validate address against public key
 	if err := s.validateUTXOAddress(utxo); err != nil {
@@ -319,7 +342,8 @@ func (s *Sweeper) setChainDepth(txid string, depth int) {
 	s.chainDepth[txid] = depth
 }
 
-// Spend creates a spending transaction
+// Spend creates a spending transaction from the indexed UTXOs.
+// It performs coin selection, fee calculation, and transaction building.
 func (s *Sweeper) Spend(outputs []TxOutput) (*TransactionPlan, error) {
 	if len(outputs) == 0 {
 		return nil, errors.New("no outputs specified")
@@ -647,7 +671,8 @@ func (s *Sweeper) ConsolidateAll(destAddr string) (*TransactionPlan, error) {
 	return &TransactionPlan{Inputs: cands, Outputs: outputs, FeeSats: fee, RawTx: tx, PSBT: psbt, ChangeIdxs: nil}, nil
 }
 
-// SpendEven builds evenly distributed outputs across provided addresses and spends
+// SpendEven creates evenly distributed outputs across the provided addresses.
+// It splits the total amount equally among all destination addresses.
 func (s *Sweeper) SpendEven(destAddrs []string, totalSats int64, minChunk int64) (*TransactionPlan, error) {
 	if len(destAddrs) == 0 {
 		return nil, errors.New("no destination addresses")
@@ -668,7 +693,8 @@ func (s *Sweeper) SpendEven(destAddrs []string, totalSats int64, minChunk int64)
 	return s.Spend(outs)
 }
 
-// SpendWeighted distributes a total across weighted addresses and spends
+// SpendWeighted distributes funds across addresses according to their weights.
+// It creates outputs proportional to each address's weight in basis points.
 func (s *Sweeper) SpendWeighted(weights []WeightedAddr, totalSats int64, minChunk int64) (*TransactionPlan, error) {
 	outs := buildWeightedOutputs(totalSats, weights, minChunk)
 	if len(outs) == 0 {

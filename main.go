@@ -1,3 +1,5 @@
+// Package main provides a command-line interface for the Bitcoin UTXO sweeper library.
+// This demonstrates how to use the Sweeper API for UTXO management and transaction creation.
 package main
 
 import (
@@ -7,17 +9,20 @@ import (
 	"os"
 )
 
-// Default testnet destination address (P2WPKH example). Override via --dest or DEST_ADDR env.
+// DEFAULT_DEST_ADDR is a canonical Bitcoin testnet address used as the default destination.
+// It can be overridden via the --dest flag or DEST_ADDR environment variable.
 const DEFAULT_DEST_ADDR = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
 
-// Main function demonstrating the new Sweeper API
+// main demonstrates the Sweeper API by loading UTXOs from a JSON file and creating a transaction.
+// It shows how to configure the sweeper, index UTXOs, and generate a PSBT for signing.
 func main() {
-	// Flags/environment
+	// Parse command-line flags
 	destFlag := flag.String("dest", "", "destination address for spend (overrides DEST_ADDR env)")
 	testMode := flag.Bool("testmode", true, "enable test mode (skip strict address validation)")
 	noPubKeyCheck := flag.Bool("no-pubkey-check", true, "disable enforcing that inputs match configured pubkey")
 	flag.Parse()
 
+	// Determine destination address from flag, environment, or default
 	destAddr := os.Getenv("DEST_ADDR")
 	if *destFlag != "" {
 		destAddr = *destFlag
@@ -25,26 +30,27 @@ func main() {
 	if destAddr == "" {
 		destAddr = DEFAULT_DEST_ADDR
 	}
-	// Read UTXOs from file
+
+	// Load UTXOs from JSON file
 	var utxos []UTXO
 	if err := json.Unmarshal(mustReadFile("utxos.json"), &utxos); err != nil {
 		fmt.Fprintf(os.Stderr, "bad utxos.json: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Create sweeper instance
-	// In real usage, this would be a real public key
+	// Create sweeper instance with test public key
+	// In production, this would be a real 33-byte compressed public key
 	testPubKey := []byte("test_public_key_32_bytes_long_here")
 	sweeper := NewSweeper(testPubKey, BitcoinTestnet)
 
-	// Configure sweeper
-	sweeper.SetFeeRate(5)
-	sweeper.SetDustRate(600, 0.50, 55000)
-	sweeper.SetUnconfirmedPolicy(true, 2, 2)
-	sweeper.SetTestMode(*testMode)
-	sweeper.SetPubKeyCheck(!*noPubKeyCheck)
+	// Configure sweeper with appropriate settings
+	sweeper.SetFeeRate(5)                    // 5 sat/vB fee rate
+	sweeper.SetDustRate(600, 0.50, 55000)    // $0.50 dust threshold at $55k BTC
+	sweeper.SetUnconfirmedPolicy(true, 2, 2) // Allow 2 unconfirmed inputs, max depth 2
+	sweeper.SetTestMode(*testMode)           // Enable/disable test mode
+	sweeper.SetPubKeyCheck(!*noPubKeyCheck)  // Enable/disable public key validation
 
-	// Index UTXOs
+	// Index all UTXOs from the file
 	fmt.Println("Indexing UTXOs...")
 	for i, utxo := range utxos {
 		if err := sweeper.Index(utxo); err != nil {
@@ -54,9 +60,9 @@ func main() {
 		fmt.Printf("Indexed UTXO %d: %s:%d (%d sats)\n", i, utxo.TxID, utxo.Vout, utxo.ValueSats)
 	}
 
-	// Create spending transaction
+	// Create spending transaction with single output
 	outputs := []TxOutput{
-		{Address: destAddr, ValueSats: 150_000},
+		{Address: destAddr, ValueSats: 150_000}, // Send 150,000 sats to destination
 	}
 
 	fmt.Println("\nCreating spending transaction...")
@@ -66,25 +72,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Encode PSBT
+	// Encode PSBT for external signing
 	psbtB64, err := plan.PSBT.B64Encode()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "psbt encode failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Print results
+	// Display transaction details
 	fmt.Println("\nTransaction Plan:")
 	fmt.Println("Inputs:", plan.Inputs)
 	fmt.Println("Outputs:", plan.Outputs)
 	fmt.Println("Fee (sats):", plan.FeeSats)
 	fmt.Println("PSBT (b64):", psbtB64)
 
-	// Show chain depth
+	// Show unconfirmed transaction chain depth
 	fmt.Println("\nChain Depth:", sweeper.PendingChainDepth())
 }
 
-// Helper function to read file
+// mustReadFile reads a file and exits the program if an error occurs.
+// This is a helper function for the main demonstration.
 func mustReadFile(path string) []byte {
 	b, err := os.ReadFile(path)
 	if err != nil {

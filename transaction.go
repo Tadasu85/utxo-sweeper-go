@@ -1,3 +1,5 @@
+// Package main provides a dependency-free Bitcoin UTXO sweeper library.
+// This file contains Bitcoin transaction structures, serialization, and PSBT handling.
 package main
 
 import (
@@ -6,32 +8,40 @@ import (
 	"errors"
 )
 
-// Transaction structures
+// OutPoint represents a reference to a previous transaction output.
+// It consists of the transaction hash and output index.
 type OutPoint struct {
-	Hash  [32]byte
-	Index uint32
+	Hash  [32]byte // SHA256 hash of the previous transaction
+	Index uint32   // Output index in the previous transaction
 }
 
+// TxIn represents a transaction input that spends a previous output.
+// It includes the previous output reference, signature script, witness data, and sequence number.
 type TxIn struct {
-	PreviousOutPoint OutPoint
-	SignatureScript  []byte
-	Witness          [][]byte
-	Sequence         uint32
+	PreviousOutPoint OutPoint // Reference to the previous output being spent
+	SignatureScript  []byte   // Legacy signature script (empty for SegWit)
+	Witness          [][]byte // Witness data for SegWit transactions
+	Sequence         uint32   // Sequence number for RBF and time locks
 }
 
+// TxOut represents a transaction output that creates new UTXOs.
+// It specifies the value in satoshis and the output script.
 type TxOut struct {
-	Value    int64
-	PkScript []byte
+	Value    int64  // Value in satoshis
+	PkScript []byte // Output script (e.g., P2WPKH, P2TR)
 }
 
+// MsgTx represents a complete Bitcoin transaction.
+// It contains the version, inputs, outputs, and lock time.
 type MsgTx struct {
-	Version  int32
-	TxIn     []TxIn
-	TxOut    []TxOut
-	LockTime uint32
+	Version  int32   // Transaction version (typically 1 or 2)
+	TxIn     []TxIn  // List of transaction inputs
+	TxOut    []TxOut // List of transaction outputs
+	LockTime uint32  // Block height or timestamp when transaction becomes valid
 }
 
-// Create new transaction
+// NewMsgTx creates a new Bitcoin transaction with the specified version.
+// The transaction is initialized with empty inputs, outputs, and zero lock time.
 func NewMsgTx(version int32) *MsgTx {
 	return &MsgTx{
 		Version:  version,
@@ -41,17 +51,20 @@ func NewMsgTx(version int32) *MsgTx {
 	}
 }
 
-// Add input
+// AddTxIn adds a transaction input to the transaction.
+// This method appends the input to the existing list of inputs.
 func (tx *MsgTx) AddTxIn(txin TxIn) {
 	tx.TxIn = append(tx.TxIn, txin)
 }
 
-// Add output
+// AddTxOut adds a transaction output to the transaction.
+// This method appends the output to the existing list of outputs.
 func (tx *MsgTx) AddTxOut(txout TxOut) {
 	tx.TxOut = append(tx.TxOut, txout)
 }
 
-// Serialize transaction
+// Serialize converts the transaction to its raw byte representation.
+// This follows the standard Bitcoin transaction serialization format.
 func (tx *MsgTx) Serialize() []byte {
 	var buf bytes.Buffer
 
@@ -130,37 +143,45 @@ func writeVarInt(w *bytes.Buffer, val uint64) {
 
 // readVarInt function removed - was unused
 
-// PSBT structures
+// PSBTInput represents a Partially Signed Bitcoin Transaction input.
+// It contains all the data needed to sign a specific input.
 type PSBTInput struct {
-	NonWitnessUtxo     *MsgTx
-	WitnessUtxo        *TxOut
-	PartialSigs        map[string][]byte
-	SighashType        uint32
-	RedeemScript       []byte
-	WitnessScript      []byte
-	Bip32Derivation    map[string]*Bip32Derivation
-	FinalScriptSig     []byte
-	FinalScriptWitness [][]byte
+	NonWitnessUtxo     *MsgTx                      // Full previous transaction (for legacy inputs)
+	WitnessUtxo        *TxOut                      // Previous output (for SegWit inputs)
+	PartialSigs        map[string][]byte           // Partial signatures by public key
+	SighashType        uint32                      // Signature hash type
+	RedeemScript       []byte                      // P2SH redeem script
+	WitnessScript      []byte                      // SegWit witness script
+	Bip32Derivation    map[string]*Bip32Derivation // BIP32 derivation paths
+	FinalScriptSig     []byte                      // Final signature script
+	FinalScriptWitness [][]byte                    // Final witness data
 }
 
+// PSBTOutput represents a Partially Signed Bitcoin Transaction output.
+// It contains metadata about how to spend the output.
 type PSBTOutput struct {
-	RedeemScript    []byte
-	WitnessScript   []byte
-	Bip32Derivation map[string]*Bip32Derivation
+	RedeemScript    []byte                      // P2SH redeem script
+	WitnessScript   []byte                      // SegWit witness script
+	Bip32Derivation map[string]*Bip32Derivation // BIP32 derivation paths
 }
 
+// Bip32Derivation contains BIP32 derivation path information.
+// It specifies how to derive a key from a master key.
 type Bip32Derivation struct {
-	MasterFingerprint [4]byte
-	Path              []uint32
+	MasterFingerprint [4]byte  // First 4 bytes of the master key's hash160
+	Path              []uint32 // Derivation path (e.g., [0, 1, 2])
 }
 
+// PSBT represents a Partially Signed Bitcoin Transaction.
+// It contains an unsigned transaction and metadata for signing.
 type PSBT struct {
-	UnsignedTx *MsgTx
-	Inputs     []PSBTInput
-	Outputs    []PSBTOutput
+	UnsignedTx *MsgTx       // The unsigned transaction
+	Inputs     []PSBTInput  // Input metadata for signing
+	Outputs    []PSBTOutput // Output metadata
 }
 
-// Create PSBT from unsigned transaction
+// NewPSBTFromUnsignedTx creates a new PSBT from an unsigned transaction.
+// It initializes the PSBT with empty input and output metadata.
 func NewPSBTFromUnsignedTx(tx *MsgTx) *PSBT {
 	psbt := &PSBT{
 		UnsignedTx: tx,
@@ -186,7 +207,8 @@ func NewPSBTFromUnsignedTx(tx *MsgTx) *PSBT {
 	return psbt
 }
 
-// Serialize PSBT
+// Serialize converts the PSBT to its binary representation.
+// This follows the BIP-174 PSBT serialization format.
 func (psbt *PSBT) Serialize() []byte {
 	var buf bytes.Buffer
 
@@ -271,7 +293,8 @@ func serializeMap(buf *bytes.Buffer, m map[string][]byte) {
 	buf.WriteByte(0x00) // separator
 }
 
-// Base64 encode PSBT
+// B64Encode converts the PSBT to a base64-encoded string.
+// This is the standard format for sharing PSBTs between applications.
 func (psbt *PSBT) B64Encode() (string, error) {
 	data := psbt.Serialize()
 	return base64Encode(data), nil

@@ -1,3 +1,6 @@
+// Package main provides a dependency-free Bitcoin UTXO sweeper library.
+// This file contains Bitcoin-specific primitives including network configurations,
+// Bech32/Bech32m encoding/decoding, address derivation, and script building.
 package main
 
 import (
@@ -5,74 +8,77 @@ import (
 	"errors"
 )
 
-// Network types
+// Network represents the blockchain network type.
 type Network int
 
 const (
-	BitcoinMainnet Network = iota
-	BitcoinTestnet
-	LitecoinMainnet
-	LitecoinTestnet
+	BitcoinMainnet  Network = iota // Bitcoin mainnet
+	BitcoinTestnet                 // Bitcoin testnet
+	LitecoinMainnet                // Litecoin mainnet
+	LitecoinTestnet                // Litecoin testnet
 )
 
-// Asset types
+// Asset represents the cryptocurrency asset type.
 type Asset int
 
 const (
-	BTC Asset = iota
-	LTC
+	BTC Asset = iota // Bitcoin
+	LTC              // Litecoin
 )
 
-// Address types
+// AddressType represents the Bitcoin address format type.
 type AddressType int
 
 const (
-	P2WPKH AddressType = iota
-	P2TR
+	P2WPKH AddressType = iota // Pay-to-Witness-Public-Key-Hash (SegWit v0)
+	P2TR                      // Pay-to-Taproot (SegWit v1)
 )
 
-// Network configuration
+// NetworkConfig holds configuration parameters for a specific blockchain network.
+// This includes Bech32 prefixes, address prefixes, and other network-specific constants.
 type NetworkConfig struct {
-	Network     Network
-	Asset       Asset
-	Bech32HRP   string
-	Bech32mHRP  string
-	P2PKHPrefix byte
-	P2SHPrefix  byte
+	Network     Network // The network type
+	Asset       Asset   // The cryptocurrency asset
+	Bech32HRP   string  // Human-readable part for Bech32 (SegWit v0)
+	Bech32mHRP  string  // Human-readable part for Bech32m (SegWit v1/Taproot)
+	P2PKHPrefix byte    // Legacy P2PKH address prefix
+	P2SHPrefix  byte    // Legacy P2SH address prefix
 }
 
+// networkConfigs defines the configuration parameters for each supported network.
+// These values are based on BIP-173 (Bech32) and BIP-350 (Bech32m) specifications.
 var networkConfigs = map[Network]NetworkConfig{
 	BitcoinMainnet: {
 		Network:     BitcoinMainnet,
 		Asset:       BTC,
-		Bech32HRP:   "bc",
-		Bech32mHRP:  "bc",
-		P2PKHPrefix: 0x00,
-		P2SHPrefix:  0x05,
+		Bech32HRP:   "bc", // BIP-173: bc1...
+		Bech32mHRP:  "bc", // BIP-350: bc1p... (Taproot)
+		P2PKHPrefix: 0x00, // Legacy: 1...
+		P2SHPrefix:  0x05, // Legacy: 3...
 	},
 	BitcoinTestnet: {
 		Network:     BitcoinTestnet,
 		Asset:       BTC,
-		Bech32HRP:   "tb",
-		Bech32mHRP:  "tb",
-		P2PKHPrefix: 0x6f,
-		P2SHPrefix:  0xc4,
+		Bech32HRP:   "tb", // BIP-173: tb1...
+		Bech32mHRP:  "tb", // BIP-350: tb1p... (Taproot)
+		P2PKHPrefix: 0x6f, // Legacy: m/n...
+		P2SHPrefix:  0xc4, // Legacy: 2...
 	},
 	LitecoinMainnet: {
 		Network:     LitecoinMainnet,
 		Asset:       LTC,
-		Bech32HRP:   "ltc",
-		Bech32mHRP:  "ltc",
-		P2PKHPrefix: 0x30,
-		P2SHPrefix:  0x32,
+		Bech32HRP:   "ltc", // Litecoin: ltc1...
+		Bech32mHRP:  "ltc", // Litecoin: ltc1p... (Taproot)
+		P2PKHPrefix: 0x30,  // Legacy: L...
+		P2SHPrefix:  0x32,  // Legacy: M...
 	},
 	LitecoinTestnet: {
 		Network:     LitecoinTestnet,
 		Asset:       LTC,
-		Bech32HRP:   "tltc",
-		Bech32mHRP:  "tltc",
-		P2PKHPrefix: 0x6f,
-		P2SHPrefix:  0xc4,
+		Bech32HRP:   "tltc", // Litecoin testnet: tltc1...
+		Bech32mHRP:  "tltc", // Litecoin testnet: tltc1p... (Taproot)
+		P2PKHPrefix: 0x6f,   // Legacy: m/n...
+		P2SHPrefix:  0xc4,   // Legacy: Q...
 	},
 }
 
@@ -94,10 +100,12 @@ func init() {
 	}
 }
 
-// Bech32 polynomial (BIP-173)
+// gen is the Bech32 generator polynomial coefficients as specified in BIP-173.
+// These values are used in the polymod function for checksum calculation.
 var gen = []int{0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3}
 
-// Bech32 checksum (BIP-173 polymod)
+// bech32Polymod implements the Bech32 checksum polynomial as specified in BIP-173.
+// It takes a slice of 5-bit values and returns the polymod checksum.
 func bech32Polymod(values []int) int {
 	chk := 1
 	for _, v := range values {
@@ -144,7 +152,8 @@ func bech32CreateChecksum(hrp string, data []int, constant int) []int {
 	return checksum
 }
 
-// Bech32 encode
+// Bech32Encode creates a Bech32-encoded string from a human-readable part and 5-bit data.
+// It automatically selects the correct checksum constant (1 for SegWit v0, 0x2bc830a3 for Taproot).
 func Bech32Encode(hrp string, data []int) string {
 	// Select bech32 (1) for v0, bech32m (0x2bc830a3) for v>=1
 	constant := 1
@@ -159,7 +168,8 @@ func Bech32Encode(hrp string, data []int) string {
 	return result
 }
 
-// Bech32 decode
+// Bech32Decode parses a Bech32-encoded string and returns the human-readable part and 5-bit data.
+// It validates the checksum and returns an error if the string is malformed.
 func Bech32Decode(bech string) (string, []int, error) {
 	if len(bech) < 8 || len(bech) > 90 {
 		return "", nil, errors.New("invalid bech32 string length")
@@ -319,7 +329,8 @@ type Address struct {
 	Data    []byte
 }
 
-// Create P2WPKH address
+// CreateP2WPKH creates a Pay-to-Witness-Public-Key-Hash (SegWit v0) address.
+// It takes a 20-byte public key hash and network type, returning a Bech32-encoded address.
 func CreateP2WPKH(pubKeyHash []byte, network Network) (string, error) {
 	if len(pubKeyHash) != 20 {
 		return "", errors.New("invalid pubkey hash length")
@@ -342,7 +353,8 @@ func CreateP2WPKH(pubKeyHash []byte, network Network) (string, error) {
 	return Bech32Encode(config.Bech32HRP, data5bit), nil
 }
 
-// Create P2TR address
+// CreateP2TR creates a Pay-to-Taproot (SegWit v1) address.
+// It takes a 32-byte Taproot output key and network type, returning a Bech32m-encoded address.
 func CreateP2TR(taprootOutputKey []byte, network Network) (string, error) {
 	if len(taprootOutputKey) != 32 {
 		return "", errors.New("invalid taproot output key length")
@@ -365,7 +377,8 @@ func CreateP2TR(taprootOutputKey []byte, network Network) (string, error) {
 	return Bech32Encode(config.Bech32mHRP, data5bit), nil
 }
 
-// Decode address
+// DecodeAddress parses a Bitcoin address and returns its components.
+// It supports both Bech32 (SegWit v0) and Bech32m (Taproot) address formats.
 func DecodeAddress(addr string) (*Address, error) {
 	hrp, data, err := Bech32Decode(addr)
 	if err != nil {
@@ -412,7 +425,8 @@ func DecodeAddress(addr string) (*Address, error) {
 	}, nil
 }
 
-// Validate address against public key
+// ValidateAddress verifies that an address is valid and matches the provided public key.
+// It checks the address format, network compatibility, and cryptographic validation.
 func ValidateAddress(addr string, pubKey []byte, network Network) error {
 	decoded, err := DecodeAddress(addr)
 	if err != nil {
@@ -456,12 +470,15 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// Derive addresses from public key
+// DeriveChangeAddress creates a change address from a public key.
+// This is used for returning excess funds to the same wallet.
 func DeriveChangeAddress(pubKey []byte, network Network) (string, error) {
 	pubKeyHash := Hash160(pubKey)
 	return CreateP2WPKH(pubKeyHash, network)
 }
 
+// DeriveDepositAddress creates a deposit address from a public key and optional tag.
+// The tag allows for multiple unique addresses from the same public key.
 func DeriveDepositAddress(pubKey []byte, tag []byte, network Network) (string, error) {
 	// Combine pubkey with tag
 	combined := append(pubKey, tag...)
