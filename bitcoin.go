@@ -94,10 +94,10 @@ func init() {
 	}
 }
 
-// Bech32 polynomial
+// Bech32 polynomial (BIP-173)
 var gen = []int{0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3}
 
-// Bech32 checksum
+// Bech32 checksum (BIP-173 polymod)
 func bech32Polymod(values []int) int {
 	chk := 1
 	for _, v := range values {
@@ -123,15 +123,15 @@ func bech32ExpandHRP(hrp string) []int {
 	return exp
 }
 
-// Bech32 verify checksum
-func bech32VerifyChecksum(hrp string, data []int) bool {
-	return bech32Polymod(append(bech32ExpandHRP(hrp), data...)) == 1
+// Bech32 verify checksum (constant=1) and Bech32m verify (constant=0x2bc830a3)
+func bech32VerifyChecksum(hrp string, data []int, constant int) bool {
+	return bech32Polymod(append(bech32ExpandHRP(hrp), data...)) == constant
 }
 
-// Bech32 create checksum
-func bech32CreateChecksum(hrp string, data []int) []int {
+// Bech32/Bech32m create checksum with provided constant
+func bech32CreateChecksum(hrp string, data []int, constant int) []int {
 	values := append(bech32ExpandHRP(hrp), data...)
-	polymod := bech32Polymod(append(values, 0, 0, 0, 0, 0, 0)) ^ 1
+	polymod := bech32Polymod(append(values, 0, 0, 0, 0, 0, 0)) ^ constant
 	checksum := make([]int, 6)
 	for i := 0; i < 6; i++ {
 		checksum[i] = (polymod >> (5 * (5 - i))) & 31
@@ -141,7 +141,12 @@ func bech32CreateChecksum(hrp string, data []int) []int {
 
 // Bech32 encode
 func Bech32Encode(hrp string, data []int) string {
-	combined := append(data, bech32CreateChecksum(hrp, data)...)
+	// Select bech32 (1) for v0, bech32m (0x2bc830a3) for v>=1
+	constant := 1
+	if len(data) > 0 && data[0] != 0 {
+		constant = 0x2bc830a3
+	}
+	combined := append(data, bech32CreateChecksum(hrp, data, constant)...)
 	result := hrp + "1"
 	for _, v := range combined {
 		result += string(charset[v])
@@ -201,8 +206,15 @@ func Bech32Decode(bech string) (string, []int, error) {
 		dataInt[i] = charsetMap[byte(c)]
 	}
 
-	// Verify checksum
-	if !bech32VerifyChecksum(hrp, dataInt) {
+	// Verify checksum per BIP-350 using version in dataInt[0]
+	constant := 1
+	if len(dataInt) == 0 {
+		return "", nil, errors.New("invalid data")
+	}
+	if dataInt[0] != 0 {
+		constant = 0x2bc830a3
+	}
+	if !bech32VerifyChecksum(hrp, dataInt, constant) {
 		return "", nil, errors.New("invalid checksum")
 	}
 
@@ -273,6 +285,30 @@ func convertBits(data []int, fromBits, toBits int, pad bool) ([]byte, error) {
 	return result, nil
 }
 
+// Convert bytes (8-bit) to 5-bit groups (ints) per BIP-173
+func convert8to5(data []byte) ([]int, error) {
+	acc := 0
+	bits := 0
+	ret := make([]int, 0)
+	const toBits = 5
+	const maxv = (1 << toBits) - 1
+	for _, b := range data {
+		if b>>8 != 0 {
+			return nil, errors.New("invalid byte")
+		}
+		acc = (acc << 8) | int(b)
+		bits += 8
+		for bits >= toBits {
+			bits -= toBits
+			ret = append(ret, (acc>>bits)&maxv)
+		}
+	}
+	if bits > 0 {
+		ret = append(ret, (acc<<(toBits-bits))&maxv)
+	}
+	return ret, nil
+}
+
 // Address validation and creation
 type Address struct {
 	Type    AddressType
@@ -291,12 +327,14 @@ func CreateP2WPKH(pubKeyHash []byte, network Network) (string, error) {
 		return "", errors.New("unsupported network")
 	}
 
-	// Convert properly
-	data5bit := make([]int, 0, 1+len(pubKeyHash)*2)
-	data5bit = append(data5bit, 0) // witness version 0
-	for _, b := range pubKeyHash {
-		data5bit = append(data5bit, int(b)&31, int(b)>>5)
+	// Convert witness program to 5-bit groups
+	prog5, err := convert8to5(pubKeyHash)
+	if err != nil {
+		return "", err
 	}
+	data5bit := make([]int, 0, 1+len(prog5))
+	data5bit = append(data5bit, 0) // witness version 0
+	data5bit = append(data5bit, prog5...)
 
 	return Bech32Encode(config.Bech32HRP, data5bit), nil
 }
@@ -312,12 +350,14 @@ func CreateP2TR(taprootOutputKey []byte, network Network) (string, error) {
 		return "", errors.New("unsupported network")
 	}
 
-	// Convert 32 bytes to 5-bit groups
-	data5bit := make([]int, 0, 1+64) // 1 for version + 64 for 32 bytes
-	data5bit = append(data5bit, 1)   // witness version 1
-	for _, b := range taprootOutputKey {
-		data5bit = append(data5bit, int(b)&31, int(b)>>5)
+	// Convert witness program to 5-bit groups
+	prog5, err := convert8to5(taprootOutputKey)
+	if err != nil {
+		return "", err
 	}
+	data5bit := make([]int, 0, 1+len(prog5)) // 1 for version
+	data5bit = append(data5bit, 1)           // witness version 1
+	data5bit = append(data5bit, prog5...)
 
 	return Bech32Encode(config.Bech32mHRP, data5bit), nil
 }
