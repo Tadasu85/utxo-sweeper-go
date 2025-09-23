@@ -114,6 +114,8 @@ type Sweeper struct {
 	kv           KV             // Key-value store for UTXO persistence
 	indexedUTXOs []UTXO         // Currently indexed UTXOs
 	chainDepth   map[string]int // Transaction ID to chain depth mapping
+	// Optional taproot change key (x-only 32 bytes). If set, change uses P2TR.
+	taprootChangeKey []byte
 }
 
 // NewSweeper creates a new Sweeper instance with default configuration.
@@ -174,6 +176,16 @@ func (s *Sweeper) SetNetwork(network Network) {
 // SetPubKey sets the public key
 func (s *Sweeper) SetPubKey(pubKey []byte) {
 	s.pubKey = pubKey
+}
+
+// SetTaprootChangeKey sets a 32-byte x-only taproot output key for change.
+// When configured, change outputs will use P2TR with this key.
+func (s *Sweeper) SetTaprootChangeKey(xOnly []byte) error {
+	if len(xOnly) != 32 {
+		return errors.New("taproot change key must be 32-byte x-only public key")
+	}
+	s.taprootChangeKey = append([]byte(nil), xOnly...)
+	return nil
 }
 
 // SetTestMode enables test mode (skips strict address validation)
@@ -352,8 +364,12 @@ func (s *Sweeper) Spend(outputs []TxOutput) (*TransactionPlan, error) {
 	// Validate outputs
 	for i, output := range outputs {
 		if !s.testMode {
-			if _, err := DecodeAddress(output.Address); err != nil {
+			dec, err := DecodeAddress(output.Address)
+			if err != nil {
 				return nil, fmt.Errorf("invalid output address at index %d: %w", i, err)
+			}
+			if dec.Network != s.network {
+				return nil, fmt.Errorf("output address network mismatch at index %d", i)
 			}
 		}
 		if output.ValueSats <= 0 {
@@ -375,6 +391,9 @@ func (s *Sweeper) Spend(outputs []TxOutput) (*TransactionPlan, error) {
 func (s *Sweeper) getChangeAddress() (string, error) {
 	if s.testMode {
 		return "tb1test_change_address", nil
+	}
+	if len(s.taprootChangeKey) == 32 {
+		return CreateP2TR(s.taprootChangeKey, s.network)
 	}
 	return DeriveChangeAddress(s.pubKey, s.network)
 }
@@ -448,10 +467,8 @@ func (s *Sweeper) buildTransaction(utxos []UTXO, outputs []TxOutput, changeAddr 
 		}
 	}
 
-	// Recalculate fee with final outputs
-	nIn := len(selected)
-	nOut := len(finalOutputs)
-	vbytes := estimateTxVBytes(nIn, nOut)
+	// Recalculate fee with final outputs using address-aware estimator
+	vbytes := estimateTxVBytesDetailed(s, selected, finalOutputs)
 	finalFee := vbytes * s.feeRateSatsVB
 
 	// Adjust change for final fee
@@ -461,7 +478,8 @@ func (s *Sweeper) buildTransaction(utxos []UTXO, outputs []TxOutput, changeAddr 
 	}
 
 	if len(changeIdxs) == 1 {
-		finalOutputs[changeIdxs[0]].ValueSats += changeDelta
+		// Final change should equal (totalIn - totalOut - finalFee)
+		finalOutputs[changeIdxs[0]].ValueSats = changeDelta
 	} else if len(changeIdxs) == 0 {
 		finalFee = totalIn - totalOut
 	}
@@ -735,6 +753,56 @@ func estimateTxVBytes(nIn, nOut int) int64 {
 		outVBytes          = 31
 	)
 	return int64(baseOverheadVBytes + nIn*inVBytesTaproot + nOut*outVBytes)
+}
+
+// estimateTxVBytesDetailed estimates vbytes accounting for input/output script types.
+// This is an approximation suitable for fee planning without external libs.
+func estimateTxVBytesDetailed(s *Sweeper, inputs []UTXO, outputs []TxOutput) int64 {
+	const baseOverheadVBytes = 10
+	// Approx per-input virtual sizes
+	const (
+		inP2WPKH = 68
+		inP2TR   = 58
+	)
+	// Approx per-output sizes (value+len+script)
+	const (
+		outP2WPKH = 31
+		outP2TR   = 43
+	)
+	total := int64(baseOverheadVBytes)
+	// Inputs
+	for _, in := range inputs {
+		t := "p2wpkh"
+		if !s.testMode {
+			if dec, err := DecodeAddress(in.Address); err == nil {
+				if dec.Type == P2TR {
+					t = "p2tr"
+				}
+			}
+		}
+		if t == "p2tr" {
+			total += inP2TR
+		} else {
+			total += inP2WPKH
+		}
+	}
+	// Outputs
+	for _, out := range outputs {
+		t := "p2wpkh"
+		if !s.testMode {
+			if dec, err := DecodeAddress(out.Address); err == nil {
+				if dec.Type == P2TR {
+					t = "p2tr"
+				}
+			}
+		}
+		if t == "p2tr" {
+			total += outP2TR
+		} else {
+			total += outP2WPKH
+		}
+	}
+	return total
 }
 
 // Utilities

@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 )
@@ -64,37 +66,62 @@ func (tx *MsgTx) AddTxOut(txout TxOut) {
 }
 
 // Serialize converts the transaction to its raw byte representation.
-// This follows the standard Bitcoin transaction serialization format.
-func (tx *MsgTx) Serialize() []byte {
+// If includeWitness is true and any input
+// has witness data, the serialization uses the SegWit marker/flag and includes
+// per-input witness stacks. If includeWitness is false, the serialization is the
+// legacy (non-witness) encoding regardless of witness data presence.
+func (tx *MsgTx) Serialize(includeWitness bool) []byte {
 	var buf bytes.Buffer
 
 	// Version
 	binary.Write(&buf, binary.LittleEndian, tx.Version)
 
-	// Inputs
+	hasWitness := false
+	if includeWitness {
+		for _, in := range tx.TxIn {
+			if len(in.Witness) > 0 {
+				hasWitness = true
+				break
+			}
+		}
+	}
+
+	if hasWitness {
+		// SegWit marker and flag
+		buf.WriteByte(0x00)
+		buf.WriteByte(0x01)
+	}
+
+	// Inputs (vin)
 	writeVarInt(&buf, uint64(len(tx.TxIn)))
 	for _, txin := range tx.TxIn {
-		// Previous output
+		// Outpoint
 		buf.Write(txin.PreviousOutPoint.Hash[:])
 		binary.Write(&buf, binary.LittleEndian, txin.PreviousOutPoint.Index)
-
-		// Signature script
+		// scriptSig
 		writeVarInt(&buf, uint64(len(txin.SignatureScript)))
 		buf.Write(txin.SignatureScript)
-
-		// Sequence
+		// sequence
 		binary.Write(&buf, binary.LittleEndian, txin.Sequence)
 	}
 
-	// Outputs
+	// Outputs (vout)
 	writeVarInt(&buf, uint64(len(tx.TxOut)))
 	for _, txout := range tx.TxOut {
-		// Value
 		binary.Write(&buf, binary.LittleEndian, txout.Value)
-
-		// PkScript
 		writeVarInt(&buf, uint64(len(txout.PkScript)))
 		buf.Write(txout.PkScript)
+	}
+
+	if hasWitness {
+		// Witnesses per input
+		for _, txin := range tx.TxIn {
+			writeVarInt(&buf, uint64(len(txin.Witness)))
+			for _, item := range txin.Witness {
+				writeVarInt(&buf, uint64(len(item)))
+				buf.Write(item)
+			}
+		}
 	}
 
 	// LockTime
@@ -103,27 +130,28 @@ func (tx *MsgTx) Serialize() []byte {
 	return buf.Bytes()
 }
 
-// Calculate transaction hash
+// TxHash returns the legacy txid (double SHA256 of non-witness serialization),
+// per consensus rules (witness is excluded from txid).
 func (tx *MsgTx) TxHash() [32]byte {
-	serialized := tx.Serialize()
+	serialized := tx.Serialize(false)
+	return sha256Double(serialized)
+}
+
+// WTxHash returns the wtxid (double SHA256 of witness-inclusive serialization).
+// For transactions without witness data, wtxid equals txid.
+func (tx *MsgTx) WTxHash() [32]byte {
+	serialized := tx.Serialize(true)
 	return sha256Double(serialized)
 }
 
 // Double SHA256
 func sha256Double(data []byte) [32]byte {
-	first := sha256Sum(data)
-	second := sha256Sum(first[:])
+	first := sha256.Sum256(data)
+	second := sha256.Sum256(first[:])
 	return second
 }
 
-// SHA256 sum
-func sha256Sum(data []byte) [32]byte {
-	// This is a placeholder - in production you'd want a proper SHA256 implementation
-	// For now, we'll use a simplified version
-	var result [32]byte
-	copy(result[:], data[:min(32, len(data))])
-	return result
-}
+// removed unused helper
 
 // Write variable length integer
 func writeVarInt(w *bytes.Buffer, val uint64) {
@@ -212,51 +240,82 @@ func NewPSBTFromUnsignedTx(tx *MsgTx) *PSBT {
 func (psbt *PSBT) Serialize() []byte {
 	var buf bytes.Buffer
 
-	// PSBT magic
+	// PSBT magic: 0x70736274 0xff ("psbt\xff")
 	buf.WriteString("psbt\xff")
 
-	// Global map
-	globalMap := make(map[string][]byte)
-
-	// Unsigned transaction
-	txBytes := psbt.UnsignedTx.Serialize()
-	globalMap["unsigned_tx"] = txBytes
-
-	// Serialize global map
-	serializeMap(&buf, globalMap)
-
-	// Input maps
-	for _, input := range psbt.Inputs {
-		inputMap := make(map[string][]byte)
-
-		if input.WitnessUtxo != nil {
-			inputMap["witness_utxo"] = serializeTxOut(input.WitnessUtxo)
-		}
-
-		if input.FinalScriptSig != nil {
-			inputMap["final_script_sig"] = input.FinalScriptSig
-		}
-
-		if len(input.FinalScriptWitness) > 0 {
-			inputMap["final_script_witness"] = serializeWitness(input.FinalScriptWitness)
-		}
-
-		serializeMap(&buf, inputMap)
+	// ---- Global map ----
+	// key: 0x00 (unsigned tx), value: non-witness serialized tx
+	{
+		key := []byte{0x00}
+		val := psbt.UnsignedTx.Serialize(false)
+		writeVarInt(&buf, uint64(len(key)))
+		buf.Write(key)
+		writeVarInt(&buf, uint64(len(val)))
+		buf.Write(val)
+		// Separator
+		buf.WriteByte(0x00)
 	}
 
-	// Output maps
+	// ---- Input maps ----
+	for _, input := range psbt.Inputs {
+		// witness_utxo (type 0x01)
+		if input.WitnessUtxo != nil {
+			key := []byte{0x01}
+			val := serializeTxOut(input.WitnessUtxo)
+			writeVarInt(&buf, uint64(len(key)))
+			buf.Write(key)
+			writeVarInt(&buf, uint64(len(val)))
+			buf.Write(val)
+		}
+
+		// final_script_sig (type 0x07)
+		if input.FinalScriptSig != nil {
+			key := []byte{0x07}
+			val := input.FinalScriptSig
+			writeVarInt(&buf, uint64(len(key)))
+			buf.Write(key)
+			writeVarInt(&buf, uint64(len(val)))
+			buf.Write(val)
+		}
+
+		// final_script_witness (type 0x08), value is stack serialization
+		if len(input.FinalScriptWitness) > 0 {
+			key := []byte{0x08}
+			val := serializeWitness(input.FinalScriptWitness)
+			writeVarInt(&buf, uint64(len(key)))
+			buf.Write(key)
+			writeVarInt(&buf, uint64(len(val)))
+			buf.Write(val)
+		}
+
+		// Separator for input map
+		buf.WriteByte(0x00)
+	}
+
+	// ---- Output maps ----
 	for _, output := range psbt.Outputs {
-		outputMap := make(map[string][]byte)
-
+		// redeem_script (type 0x00)
 		if output.RedeemScript != nil {
-			outputMap["redeem_script"] = output.RedeemScript
+			key := []byte{0x00}
+			val := output.RedeemScript
+			writeVarInt(&buf, uint64(len(key)))
+			buf.Write(key)
+			writeVarInt(&buf, uint64(len(val)))
+			buf.Write(val)
 		}
 
+		// witness_script (type 0x01)
 		if output.WitnessScript != nil {
-			outputMap["witness_script"] = output.WitnessScript
+			key := []byte{0x01}
+			val := output.WitnessScript
+			writeVarInt(&buf, uint64(len(key)))
+			buf.Write(key)
+			writeVarInt(&buf, uint64(len(val)))
+			buf.Write(val)
 		}
 
-		serializeMap(&buf, outputMap)
+		// Separator for output map
+		buf.WriteByte(0x00)
 	}
 
 	return buf.Bytes()
@@ -283,15 +342,7 @@ func serializeWitness(witness [][]byte) []byte {
 }
 
 // Serialize map
-func serializeMap(buf *bytes.Buffer, m map[string][]byte) {
-	for key, value := range m {
-		writeVarInt(buf, uint64(len(key)))
-		buf.WriteString(key)
-		writeVarInt(buf, uint64(len(value)))
-		buf.Write(value)
-	}
-	buf.WriteByte(0x00) // separator
-}
+// serializeMap removed in favor of explicit BIP-174 key-value serialization
 
 // B64Encode converts the PSBT to a base64-encoded string.
 // This is the standard format for sharing PSBTs between applications.
@@ -301,40 +352,9 @@ func (psbt *PSBT) B64Encode() (string, error) {
 }
 
 // Simple base64 encoding
-func base64Encode(data []byte) string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+func base64Encode(data []byte) string { return base64.StdEncoding.EncodeToString(data) }
 
-	var result []byte
-	for i := 0; i < len(data); i += 3 {
-		chunk := data[i:min(i+3, len(data))]
-
-		// Convert 3 bytes to 24 bits
-		bits := uint32(0)
-		for j, b := range chunk {
-			bits |= uint32(b) << (16 - j*8)
-		}
-
-		// Convert to 4 base64 characters
-		for j := 0; j < 4; j++ {
-			if i*4/3+j < (len(data)*4+2)/3 {
-				idx := (bits >> (18 - j*6)) & 0x3f
-				result = append(result, charset[idx])
-			} else {
-				result = append(result, '=')
-			}
-		}
-	}
-
-	return string(result)
-}
-
-// Helper function
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+// removed unused helper
 
 // Create outpoint from string hash and index
 func NewOutPointFromStr(hashStr string, index uint32) (OutPoint, error) {

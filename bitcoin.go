@@ -168,8 +168,9 @@ func Bech32Encode(hrp string, data []int) string {
 	return result
 }
 
-// Bech32Decode parses a Bech32-encoded string and returns the human-readable part and 5-bit data.
-// It validates the checksum and returns an error if the string is malformed.
+// Bech32Decode parses a Bech32/Bech32m string and returns HRP and the 5-bit data
+// (including witness version in data[0]). It validates HRP charset, forbids mixed
+// case, and verifies the checksum constant using the version (BIP-173/350).
 func Bech32Decode(bech string) (string, []int, error) {
 	if len(bech) < 8 || len(bech) > 90 {
 		return "", nil, errors.New("invalid bech32 string length")
@@ -206,6 +207,16 @@ func Bech32Decode(bech string) (string, []int, error) {
 	}
 
 	hrp := bech[:pos]
+	// Validate HRP characters per BIP-173 (33..126)
+	if len(hrp) == 0 {
+		return "", nil, errors.New("empty HRP")
+	}
+	for i := 0; i < len(hrp); i++ {
+		c := hrp[i]
+		if c < 33 || c > 126 {
+			return "", nil, errors.New("invalid HRP character")
+		}
+	}
 	data := bech[pos+1:]
 
 	// Validate characters
@@ -221,12 +232,19 @@ func Bech32Decode(bech string) (string, []int, error) {
 		dataInt[i] = charsetMap[byte(c)]
 	}
 
-	// Verify checksum per BIP-350 using version in dataInt[0]
-	constant := 1
-	if len(dataInt) == 0 {
-		return "", nil, errors.New("invalid data")
+	// Verify checksum constant based on witness version per BIP-350
+	if len(dataInt) < 7 { // at least version + checksum(6)
+		return "", nil, errors.New("invalid data length")
 	}
-	if dataInt[0] != 0 {
+	ver := dataInt[0]
+	if ver < 0 || ver > 31 { // 5-bit value range
+		return "", nil, errors.New("invalid witness version value")
+	}
+	var constant int
+	switch ver {
+	case 0:
+		constant = 1
+	default:
 		constant = 0x2bc830a3
 	}
 	if !bech32VerifyChecksum(hrp, dataInt, constant) {
@@ -256,12 +274,7 @@ func Hash160(data []byte) []byte {
 }
 
 // RIPEMD160 implementation (simplified)
-func ripemd160(data []byte) []byte {
-	// This is a placeholder - in production you'd want a proper RIPEMD160 implementation
-	// For now, we'll use a simplified version that just returns the first 20 bytes of SHA256
-	hash := sha256.Sum256(data)
-	return hash[:20]
-}
+func ripemd160(data []byte) []byte { h := NewRIPEMD160(); h.Write(data); return h.Sum(nil) }
 
 // SHA256
 func SHA256(data []byte) []byte {
@@ -377,31 +390,26 @@ func CreateP2TR(taprootOutputKey []byte, network Network) (string, error) {
 	return Bech32Encode(config.Bech32mHRP, data5bit), nil
 }
 
-// DecodeAddress parses a Bitcoin address and returns its components.
-// It supports both Bech32 (SegWit v0) and Bech32m (Taproot) address formats.
+// DecodeAddress parses a Bech32/Bech32m address and returns address components.
+// Network is determined by HRP; type is determined by witness version (v0=P2WPKH,
+// v1=P2TR). Only these types are supported by this library.
 func DecodeAddress(addr string) (*Address, error) {
 	hrp, data, err := Bech32Decode(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	// Find network
+	// Determine network by HRP only (either Bech32 HRP or Bech32m HRP matches)
 	var network Network
-	var addrType AddressType
+	found := false
 	for net, config := range networkConfigs {
-		if hrp == config.Bech32HRP {
+		if hrp == config.Bech32HRP || hrp == config.Bech32mHRP {
 			network = net
-			addrType = P2WPKH
-			break
-		}
-		if hrp == config.Bech32mHRP {
-			network = net
-			addrType = P2TR
+			found = true
 			break
 		}
 	}
-
-	if network == 0 && hrp == "" {
+	if !found {
 		return nil, errors.New("unknown network")
 	}
 
@@ -411,11 +419,22 @@ func DecodeAddress(addr string) (*Address, error) {
 		return nil, err
 	}
 
-	if addrType == P2WPKH && len(decoded) != 20 {
-		return nil, errors.New("invalid P2WPKH data length")
-	}
-	if addrType == P2TR && len(decoded) != 32 {
-		return nil, errors.New("invalid P2TR data length")
+	// Determine address type by witness version (data[0])
+	version := data[0]
+	var addrType AddressType
+	switch version {
+	case 0:
+		addrType = P2WPKH
+		if len(decoded) != 20 {
+			return nil, errors.New("invalid P2WPKH data length")
+		}
+	case 1:
+		addrType = P2TR
+		if len(decoded) != 32 {
+			return nil, errors.New("invalid P2TR data length")
+		}
+	default:
+		return nil, errors.New("unsupported witness version")
 	}
 
 	return &Address{
@@ -470,15 +489,14 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// DeriveChangeAddress creates a change address from a public key.
-// This is used for returning excess funds to the same wallet.
+// DeriveChangeAddress creates a v0 P2WPKH change address from a compressed pubkey.
 func DeriveChangeAddress(pubKey []byte, network Network) (string, error) {
 	pubKeyHash := Hash160(pubKey)
 	return CreateP2WPKH(pubKeyHash, network)
 }
 
-// DeriveDepositAddress creates a deposit address from a public key and optional tag.
-// The tag allows for multiple unique addresses from the same public key.
+// DeriveDepositAddress creates a v0 P2WPKH deposit address from a compressed pubkey
+// and optional tag; different tags yield different addresses.
 func DeriveDepositAddress(pubKey []byte, tag []byte, network Network) (string, error) {
 	// Combine pubkey with tag
 	combined := append(pubKey, tag...)
