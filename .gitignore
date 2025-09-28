@@ -5,6 +5,7 @@
 *.so
 *.dylib
 utxo_sweeper
+utxo-sweeper-go.code-workspace
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,3 +18,4 @@ utxo_sweeper
 
 # Go workspace file
 go.work
+utxo-sweeper

@@ -1,0 +1,91 @@
+# UTXO Sweeper Go
+
+A dependency-free Go library for Bitcoin UTXO management, transaction planning, and PSBT generation.
+
+## Features
+
+- **No External Dependencies**: Self-contained implementation of Bitcoin primitives
+- **Multi-Network Support**: Bitcoin/Litecoin mainnet/testnet
+- **Modern Address Support**: Bech32/Bech32m (SegWit v0/v1) and Taproot
+- **Dust Filtering**: Configurable thresholds in USD and satoshis
+- **Transaction Planning**: Efficient coin selection and fee calculation
+- **PSBT Output**: Ready for external signing
+- **Multiple Spending Strategies**: Regular spending, consolidation, weighted distribution
+
+## Quick Start
+
+```bash
+# Build the application
+go build -o utxo-sweeper .
+
+# Run with default configuration
+./utxo-sweeper
+
+# Show help
+./utxo-sweeper -help
+
+# Show version
+./utxo-sweeper -version
+```
+
+## Configuration
+
+The application uses `config.json` for configuration:
+
+```json
+{
+  "network": "bitcoin_testnet",
+  "fee_rate": 5,
+  "dust_threshold_usd": 0.50,
+  "price_usd_per_btc": 55000.0,
+  "allow_unconfirmed": true,
+  "max_unconfirmed": 2,
+  "max_chain_depth": 2,
+  "change_split_parts": 1,
+  "target_chunk_sats": 60000,
+  "min_chunk_sats": 20000,
+  "output_format": "human",
+  "test_mode": true,
+  "enforce_pubkey": false
+}
+```
+
+## Input Format
+
+The application expects `utxos.json` with the following format:
+
+```json
+[
+  {
+    "TxID": "1111111111111111111111111111111111111111111111111111111111111111",
+    "Vout": 0,
+    "ValueSats": 80000,
+    "Address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "Confirmed": true
+  }
+]
+```
+
+## Testing
+
+```bash
+# Run tests
+go test -v
+
+# Run tests with coverage
+go test -race -cover
+
+# Run specific test
+go test -run TestCoinSelectionAndFees
+```
+
+## Security Notes
+
+- This is a demonstration tool using fake UTXO data
+- For production use, replace with real UTXO data and disable test mode
+- Always verify PSBTs before signing and broadcasting
+- Use proper key management practices
+
+## License
+
+MIT License - see LICENSE file for details.

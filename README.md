@@ -20,13 +20,49 @@ Offline-first Go module that plans Bitcoin spends: coin selection, dust filterin
 - `utxos.json` - Sample UTXO data for testing
 
 ## Usage
-```bash
-# Build and run
-go build
-./utxo_sweeper
 
-# Or run directly
+### Build and Run
+```bash
+# Build the application
+go build -o utxo-sweeper .
+
+# Run the built binary
+./utxo-sweeper
+
+# Or run directly without building
 go run .
+
+# Run with specific options
+go run . -help
+go run . -version
+go run . -dest bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx
+```
+
+### Testing
+```bash
+# Run all tests
+go test
+
+# Run tests with verbose output
+go test -v
+
+# Run tests with race detection and coverage
+go test -race -cover
+
+# Run specific test
+go test -run TestCoinSelectionAndFees
+```
+
+### Code Quality
+```bash
+# Format code
+go fmt ./...
+
+# Check for issues
+go vet ./...
+
+# Clean build artifacts
+go clean
 ```
 
 ### CLI Flags
